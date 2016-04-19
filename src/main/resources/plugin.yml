@@ -1,0 +1,3 @@
+name: LobbyServerSelector
+main: com.mcndsj.LobbyServerSelector.LobbyServerSelector
+version: 0.0.1-SNAPSHOT
