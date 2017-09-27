@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="GameEvent">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/../GameEvent/target/GameEvent.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

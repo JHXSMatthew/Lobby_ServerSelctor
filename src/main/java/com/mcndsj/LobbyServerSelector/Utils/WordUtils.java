@@ -8,6 +8,6 @@ import java.util.regex.Pattern;
 public class WordUtils {
 
     public static int getIntFromString(String input){
-       return  Integer.parseInt(Pattern.compile("[^0-9]").matcher(input).replaceAll(""));
+        return  Integer.parseInt(Pattern.compile("[^0-9]").matcher(input).replaceAll(""));
     }
 }

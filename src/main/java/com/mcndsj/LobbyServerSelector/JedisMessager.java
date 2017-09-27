@@ -9,9 +9,11 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.scheduler.BukkitRunnable;
 import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
 import org.json.simple.parser.ParseException;
+import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPubSub;
 
 import java.net.SocketException;
@@ -42,19 +44,34 @@ public class JedisMessager implements org.bukkit.event.Listener{
         thread.execute(new Runnable() {
             @Override
             public void run() {
-                try {
-                    JedisUtils.get().subscribe(new JedisSubPubHandler(),"ServerManage.ServerNameQuery." + AddressUtils.getLocalIp());
+                try (Jedis j  =  JedisUtils.get()){
+                    j.subscribe(new JedisSubPubHandler(),"ServerManage.ServerNameQuery." + AddressUtils.getLocalIp());
                 } catch (SocketException e) {
                     e.printStackTrace();
                 }
             }
         });
-        try {
-            JedisUtils.get().publish("ServerManage.ServerNameQuery",AddressUtils.getLocalIp());
-            System.out.print("ServerManage.ServerNameQuery" + AddressUtils.getLocalIp());
-        } catch (SocketException e) {
-            e.printStackTrace();
-        }
+        new BukkitRunnable(){
+
+            @Override
+            public void run() {
+                if(lobbyTypeName != null){
+                    cancel();
+                }
+
+                try {
+                    Jedis j = JedisUtils.get();
+                    j.publish("ServerManage.ServerNameQuery",AddressUtils.getLocalIp());
+                    j.close();
+                } catch (SocketException e) {
+                    e.printStackTrace();
+                }
+            }
+        }.runTaskTimer(LobbyServerSelector.getInstance(),0,20);
+
+
+        System.out.print("Init JedisManager done!");
+
     }
 
 
@@ -65,7 +82,12 @@ public class JedisMessager implements org.bukkit.event.Listener{
                 if(count.isSubscribed()){
                     count.subscribe("QueueCount." + type);
                 }else{
-                    JedisUtils.get().subscribe(count,"QueueCount." + type);
+                    try (Jedis j  =  JedisUtils.get()) {
+                        j.subscribe(count, "QueueCount." + type);
+                        System.out.print("-------------------- QueueCount Timeout ---------------------");
+                    }catch (Exception e){
+                        e.printStackTrace();
+                    }
                 }
 
             }
@@ -75,17 +97,33 @@ public class JedisMessager implements org.bukkit.event.Listener{
 
 
     public void addToQueue(Player p,String type){
-        JedisUtils.get().publish("QueueJoin." + type ,JSONUtils.encodePlayer(p,lobbyTypeName + number,LobbyVip.getApi().isVip(p.getName())));
+        try {
+            String msg = JSONUtils.encodePlayer(p, lobbyTypeName + number, LobbyVip.getApi().isVip(p.getName()));
+            JedisUtils.publish("QueueJoin." + type ,msg);
+        }catch(Exception e){
+            e.printStackTrace();
+        }
+
     }
 
     public void sendPlayerQuit(Player p , String type){
-        JedisUtils.get().publish("playerOffline." + type ,JSONUtils.encodePlayer(p,lobbyTypeName + number,LobbyVip.getApi().isVip(p.getName())));
+        try {
+            String msg = JSONUtils.encodePlayer(p,lobbyTypeName + number,LobbyVip.getApi().isVip(p.getName()));
+            JedisUtils.publish("playerOffline." + type ,msg);
+        }catch(Exception e){
+            e.printStackTrace();
+        }
+
 
     }
 
     public void unsubscribe(){
         for(JedisPubSub h : subs){
-            h.unsubscribe();
+            try {
+                h.unsubscribe();
+            }catch(Exception e){
+
+            }
         }
 
     }
@@ -96,7 +134,12 @@ public class JedisMessager implements org.bukkit.event.Listener{
             public void run() {
                 sendSubPubHandler temp = new sendSubPubHandler();
                 subs.add(temp);
-                JedisUtils.get().subscribe(temp,"ServerSend."+ lobbyTypeName +number);
+                try (Jedis j  =  JedisUtils.get()){
+                    j.subscribe(temp, "ServerSend." + lobbyTypeName + number);
+                    System.out.print("-------------------- ServerSend Timeout ---------------------");
+                }catch(Exception e){
+                    e.printStackTrace();
+                }
             }
         });
     }
@@ -106,15 +149,20 @@ public class JedisMessager implements org.bukkit.event.Listener{
 
 
     public class JedisSubPubHandler extends JedisPubSub{
+        boolean isReceived = false;
         @Override
         public void onMessage(String channel, String message) {
+            if(isReceived){
+                return;
+            }
+            isReceived = true;
             lobbyTypeName = message.replace(String.valueOf(WordUtils.getIntFromString(message)),"");
             number = WordUtils.getIntFromString(message);
             System.out.print(" ----------- ServerName " + lobbyTypeName + " number: " + number + " -----------------");
 
             unsubscribe();
-                subs.remove(this);
-                createLobbySendListener();
+            subs.remove(this);
+            createLobbySendListener();
         }
     }
 
@@ -125,9 +173,11 @@ public class JedisMessager implements org.bukkit.event.Listener{
             try {
                 Object ojb = parser.parse(message);
                 JSONObject obj = (JSONObject) ojb;
-                LobbyServerSelector.getInstance().removeFromQueue(Bukkit.getPlayer((String)obj.get("name")));
+                Player p = Bukkit.getPlayer((String)obj.get("name"));
+                LobbyServerSelector.getInstance().removeFromQueue(p);
+                //System.out.print("Message received " +channel + " msg" + message);
                 LobbyServerSelector.getInstance().sendPlayerTo(Bukkit.getPlayer((String)obj.get("name")),(String)obj.get("server"),false);
-            } catch (ParseException e) {
+            } catch (Exception e) {
                 e.printStackTrace();
             }
 
@@ -137,24 +187,29 @@ public class JedisMessager implements org.bukkit.event.Listener{
     public class CountPubSub extends JedisPubSub{
         @Override
         public void onMessage(String channel, String message) {
-            StringTokenizer stoken = new StringTokenizer(channel, ".");
-            if(!stoken.hasMoreTokens()){
+            StringTokenizer token = new StringTokenizer(channel, ".");
+            if(!token.hasMoreTokens()){
                 return;
             }
-            stoken.nextToken();
-            String typeName = stoken.nextToken();
-
+            token.nextToken();
+            String typeName = token.nextToken();
             int count = Integer.parseInt(message);
+
             LobbyServerSelector.getInstance().getSignController().updateSignInfo(typeName,count);
         }
     }
 
     @EventHandler
     public void onQuit(PlayerQuitEvent evt){
-        LobbyServerSelector.Request r = LobbyServerSelector.getInstance().removeFromQueue(evt.getPlayer());
-        if(r != null){
-            sendPlayerQuit(evt.getPlayer(),r.lastType);
+        try {
+            LobbyServerSelector.Request r = LobbyServerSelector.getInstance().removeFromQueue(evt.getPlayer());
+            if(r != null){
+                sendPlayerQuit(evt.getPlayer(),r.lastType);
+            }
+        }catch(Exception e){
+        //TODO: add handles ?
         }
+
     }
 
 }

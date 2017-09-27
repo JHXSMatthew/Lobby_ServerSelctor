@@ -1,3 +1,4 @@
 name: LobbyServerSelector
+depend: [GameEvent]
 main: com.mcndsj.LobbyServerSelector.LobbyServerSelector
 version: 0.0.1-SNAPSHOT
